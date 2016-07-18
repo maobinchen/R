@@ -1,0 +1,187 @@
+---
+title: "wang_final"
+author: "Binchen Mao"
+date: "2016年6月24日"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Statistical analysis of Dr. Zhun Wang's dataset
+
+## *load library*
+```{r,message=FALSE}
+rm(list=ls())
+library("lme4")
+library("multcomp")
+library("lattice")
+library(nlme)
+```
+## Data input and preprocessing
+```{r}
+wang.raw=read.csv("C:\\Users\\binchen.mao\\Documents\\crownbio\\For WangZhun\\data_06102016.csv",h=T)
+days = c(0,4,7,11,14,18,21)
+wang.long = reshape(idvar='Temp.ID',varying = c(3:9),timevar = 'PGday',times=days,data=wang.raw,direction = 'long',v.names = 'TV')
+group=read.csv("C:\\Users\\binchen.mao\\Documents\\crownbio\\For WangZhun\\group_06102016.csv",h=T)
+#group$Treatment = factor(group$Treatment,ordered = T, levels =c("Control","BA-087-mAB2","Anti-hCTLA4") )
+wang = merge(wang.long,group)
+wang[order(wang$mouse,wang$PGday),][1:10,]
+```
+##data analysis
+###Check the average Tumor volume for each **Treatment** or **PGday**
+```{r}
+tapply(wang$TV,wang$Treatment,mean)
+tapply(wang$TV,wang$PGday,mean)
+```
+
+###Making boxplot to check distribution of Tumor Volume
+```{r}
+plot(TV~Treatment,data=wang)
+plot(log(TV+1)~Treatment,data=wang)
+plot(TV**(1/3)~Treatment,data=wang)
+```
+
+###Checking baseline level TV for each treatment
+```{r}
+TV0 = wang[wang$PGday==0,]
+tapply(TV0$TV,TV0$Treatment,mean)
+tapply(TV0$TV,TV0$Treatment,sd)
+TV0 = TV0[,c('mouse','TV')]
+names(TV0)[2]='TV0'
+```
+
+###Run Two way RM ANOVA and posthoc test (Tukey's HSD),
+```{r,warning=FALSE,message=FALSE}
+wang.updated=merge(wang,TV0,by='mouse')
+PGday.f = as.factor(wang.updated$PGday)
+wang.updated=data.frame(wang.updated,PGday.f)
+wang.updated$mouse=as.factor(wang.updated$mouse)
+wang.updated$TV<-wang.updated$TV-wang.updated$TV0
+logTV<-log(wang.updated$TV+1+abs(min(wang.updated$TV)),10)
+wang.updated2<-data.frame(wang.updated,logTV)
+require(car)
+leveneTest(logTV~PGday.f*Treatment,data=wang.updated2,center=mean)
+leveneTest(logTV~PGday.f*Treatment,data=wang.updated2)
+wang.aov.rm=with(wang.updated2,aov(logTV~Treatment*PGday.f+Error(mouse/PGday.f)))
+summary(wang.aov.rm)
+wang.aov=with(wang.updated2,aov(logTV~Treatment*PGday.f))
+summary(wang.aov)
+TukeyHSD(wang.aov,"Treatment")
+```
+
+###Scatterplot of TV against PGday for each treatment
+```{r}
+wang.updated2=wang.updated2[order(wang.updated2$mouse,wang.updated2$PGday),]
+wang.g1<-groupedData(TV~PGday | mouse, outer=~Treatment, order.groups=F,data=wang.updated2)
+plot(wang.g1, display='mouse', outer=TRUE, aspect=2, key=F, xlab='PGday', ylab='TV', main='Individual TV data by Treatment Group')
+
+wang.g1log<-groupedData(logTV~PGday | mouse, outer=~Treatment, data=wang.updated2)
+plot(wang.g1log, display='mouse', outer=TRUE, aspect=2, key=F, xlab='PGday', ylab='log(TV)', main='Individual TV data by Treatment Group')
+```
+
+###**Build LMM models**
+```{r,warning=F,message=F}
+wang.glog<-groupedData(logTV~PGday|mouse, data=wang.updated2, order.groups=F)
+wang.graw<-groupedData(TV~PGday|mouse, data=wang.updated2, order.groups=F)
+```
+
+####Compare model with or without sqaured terms, using raw TV
+```{r,warning=F,message=F}
+m7<-lme(TV~PGday*Treatment+I(PGday^2)+I(PGday^2):Treatment, random=~PGday+I(PGday^2)-1, method='ML', data=wang.graw)
+m6<-lme(TV~PGday*Treatment, random=~PGday-1, method='ML', data=wang.graw)
+anova(m6,m7)
+```
+
+####Build LMM model with raw TV and log transformed TV
+```{r,warning=F,message=F}
+wang.glog=with(data=wang.glog,wang.glog[order(Group,mouse,PGday),])
+wang.graw=with(data=wang.graw,wang.graw[order(Group,mouse,PGday),])
+m8<-lme(TV~PGday*Treatment+I(PGday^2)+I(PGday^2):Treatment, random=~PGday+I(PGday^2)-1, method='REML', data=wang.graw)
+summary(m8)
+m9<-lme(logTV~PGday*Treatment+I(PGday^2)+I(PGday^2):Treatment, random=~PGday+I(PGday^2)-1, method='REML', data=wang.glog)
+```
+
+####Fit mean profile curve for fixed effects
+```{r,warning=F,message=F}
+control = wang.updated2[wang.updated2$Treatment == 'Control',]
+CTLA4=wang.updated2[wang.updated2$Treatment == 'hCTLA4',]
+mAB2=wang.updated2[wang.updated2$Treatment == 'mAB2',]
+par(mfrow=c(2,2))
+curve(4.5*x^2-11.5*x+54.4,0,21,xlab="PGday",ylab="Marginal predicted TV",lty=3,lwd=2,ylim=c(-50,3200),co1=1,main="TV~PGday|Treatment curve")
+curve(2.4*x^2-1.1*x+69.3,0,21,add=T,lty=3,lwd=2,col=2)
+curve(1.6*x^2+4.4*x+50.5,0,21,add=T,lty=3,lwd=2,col=3)
+legend("topleft",levels(wang.updated$Treatment),lty=3,lwd=2,col=1:3,bty='n')
+curve(4.5*x^2-11.5*x+54.4,0,21,xlab="PGday",ylab="Marginal predicted TV",main="TV~PGday|Control",lty=3,lwd=3,ylim=c(-50,3200),co1=1)
+points(control$PGday,control$TV,col='blue')
+curve(2.4*x^2-1.1*x+69.3,0,21,ylim=c(-50,3200),xlab="PGday",ylab="Marginal predicted TV",main="TV~PGday|mAB2",lty=3,lwd=3,col=2)
+points(mAB2$PGday,mAB2$TV,col='blue')
+curve(1.6*x^2+4.4*x+50.5,0,21,ylim=c(-50,3200),xlab="PGday",ylab="Marginal predicted TV",main="TV~PGday|hCTLA4",lty=3,lwd=3,col=3)
+points(CTLA4$PGday,CTLA4$TV,col='blue')
+par(mfrow=c(1,1))
+```
+
+####Fit individual curve for each experimental subject
+```{r,warning=F,message=F}
+plot(augPred(m8,level=0:1),layout=c(5,3,1),main="Individual profile & Mean profile") #model bulit using Raw TV
+plot(augPred(m9,level=0:1),layout=c(5,3,1),main="Individual profile & Mean profile(logTV)") #model bulit using log transformed TV
+trellis.device(color=F)
+```
+
+####residue Diagnostics
+```{r,warning=F,message=F}
+plot(m8,resid(.,type="p")~fitted(.)|factor(Treatment),layout=c(3,1),aspect=2,abline=2)
+plot(m8,resid(.)~PGday,abline=0)
+plot(m9,resid(.,type="p")~fitted(.)|factor(Treatment),layout=c(3,1),aspect=2,abline=2)
+qqnorm(m8,~resid(.)|factor(Treatment),layout=c(3,1),aspect=2,id=0.05)
+```
+
+####Diagnostics of random effects
+```{r,warning=F,message=F}
+qqnorm(m8,~ranef(.),id=0.1)#Check normality of random effects
+pairs(m8,~ranef(.)|factor(Treatment),id=~mouse==8067,layout=c(3,1),aspect=2)
+```
+
+####Observed vs predicted value
+```{r,warning=F,message=F}
+plot(m8,TV~fitted(.)|factor(Treatment),id=0.05,layout=c(3,1),aspect=2,abline=c(0,1),lty=2)
+```
+
+####refit model after removing outlier 8067
+```{r,warning=F,message=F}
+wang.graw2 = wang.graw[wang.graw$mouse != 8067,]
+m8.update = update(m8,data=wang.graw2)
+summary(m8.update)
+```
+
+####Fit individual curve for each experimental subject and plot observed~fitted for updated model
+```{r,warning=F,message=F}
+plot(augPred(m8.update,level=0:1),layout=c(5,3,1),main="Individual profile & Mean profile")
+plot(m8.update,TV~fitted(.)|factor(Treatment),id=0.05,layout=c(3,1),aspect=2,abline=c(0,1),lty=2)
+```
+
+##**Conclusion**
+1.Two way RM ANOVA shows no significant treatment effect and no significant treatment*PGday interaction, while Two way ANOVA  
+and Tukey's HSD shows there are significant difference between treatements and PGday, difference between mAB2-Control are significant.
+
+2.LMM only shows significant main effect of PGday, but no significant treatment effect or treatment*PGday interaction.
+
+3.Using module nlme seems to do a better job than lme4
+
+4.using raw TV is better than log transformed TV, better agreement between fitted and observed values
+
+5.one subject 8067 is the obvious outlier, after removing it, interaction between treatment and PGday^2 becomes significant
+
+
+
+
+
+
+
+
+
+
+
+
+

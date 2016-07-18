@@ -1,0 +1,154 @@
+---
+title: "wang_final new data"
+author: "Binchen Mao"
+date: "2016年6月24日"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Statistical analysis of Dr. Zhun Wang's dataset
+
+## *load library*
+```{r,message=FALSE}
+rm(list=ls())
+library("lme4")
+library("multcomp")
+library("lattice")
+library(nlme)
+```
+## Data input and preprocessing
+```{r}
+wang=read.csv("data2_long.csv",h=T)
+#Treatment.f = factor(wang$Treatment,order=T,levels=c("LC-PBS","LC-BMS","LC-BMS-10mpk","LC-BMS-20mpk","LC-cD7A8"))
+#wang$Treatment = Treatment.f
+wang$Treatment=as.factor(paste(wang$Group,wang$Treatment,sep=""))
+TV0 = wang[wang$PGday==0,]
+#Checking baseline level TV for each treatment
+tapply(TV0$TV,TV0$Treatment,mean)
+tapply(TV0$TV,TV0$Treatment,sd)
+TV0 = TV0[,c('mouse','TV')]
+names(TV0)[2]='TV0'
+wang.updated=merge(wang,TV0,by='mouse')
+PGday.f = as.factor(wang.updated$PGday)
+wang.updated=data.frame(wang.updated,PGday.f)
+wang.updated$mouse=as.factor(paste(wang.updated$mouse,wang.updated$Treatment,sep=':'))
+wang.updated$TV<-wang.updated$TV-wang.updated$TV0
+logTV<-log(wang.updated$TV+1+abs(min(wang.updated$TV)),10)
+wang.updated2<-data.frame(wang.updated,logTV)
+wang.updated2[order(wang$mouse,wang$PGday),][1:10,]
+```
+##data analysis
+###Check the average Tumor volume for each **Treatment** or **PGday**
+```{r}
+tapply(wang$TV,wang$Treatment,mean)
+tapply(wang$TV,wang$PGday,mean)
+```
+###Scatterplot of TV against PGday for each treatment
+```{r}
+wang.updated2=wang.updated2[order(wang.updated2$mouse,wang.updated2$PGday),]
+wang.g1<-groupedData(TV~PGday | mouse, outer=~Treatment, order.groups=F,data=wang.updated2)
+plot(wang.g1, display='mouse', outer=TRUE, aspect=2, key=F, xlab='PGday', ylab='TV', main='Individual TV data by Treatment Group')
+
+wang.g1log<-groupedData(logTV~PGday | mouse, outer=~Treatment, data=wang.updated2)
+plot(wang.g1log, display='mouse', outer=TRUE, aspect=2, key=F, xlab='PGday', ylab='log(TV)', main='Individual TV data by Treatment Group')
+```
+
+###**Build LMM models**
+```{r,warning=F,message=F}
+wang.glog<-groupedData(logTV~PGday|mouse, data=wang.updated2, order.groups=F)
+wang.graw<-groupedData(TV~PGday|mouse, data=wang.updated2, order.groups=F)
+```
+
+####Compare model with or without sqaured terms, using raw TV
+```{r,warning=F,message=F}
+m7<-lme(TV~PGday*Treatment+I(PGday^2)+I(PGday^2):Treatment, random=~PGday+I(PGday^2)-1, method='ML', data=wang.graw)
+m6<-lme(TV~PGday*Treatment, random=~PGday-1, method='ML', data=wang.graw)
+anova(m6,m7)
+```
+
+####Build LMM model with raw TV and log transformed TV
+```{r,warning=F,message=F}
+wang.glog=with(data=wang.glog,wang.glog[order(Group,mouse,PGday),])
+wang.graw=with(data=wang.graw,wang.graw[order(Group,mouse,PGday),])
+m8<-lme(TV~PGday*Treatment+I(PGday^2)+I(PGday^2):Treatment, random=~PGday+I(PGday^2)-1, method='REML', data=wang.graw)
+summary(m8)
+m9<-lme(logTV~PGday*Treatment+I(PGday^2)+I(PGday^2):Treatment, random=~PGday+I(PGday^2)-1, method='REML', data=wang.glog)
+```
+####Mean profile curve
+```{r,warning=F,message=F}
+curve(6.15*x^2-7.35*x+3.27,0,14,xlab="PGday",ylim=c(0,1000),ylab="Marginal predicted TV",lty=3,lwd=2,co1=1,main="TV~PGday|Treatment curve")
+curve(2.79*x^2+2.58*x+13.09,0,14,add=T,lty=3,lwd=2,col=2)
+curve(3.21*x^2+28.46*x-7.29,0,14,add=T,lty=3,lwd=2,col=3)
+curve(3.59*x^2+14.94*x-19.23,0,14,add=T,lty=3,lwd=2,col=4)
+curve(2.14*x^2+13.71*x-3.30,0,14,add=T,lty=3,lwd=2,col=5)
+legend("topleft",levels(wang.updated2$Treatment),lty=3,lwd=2,col=1:5,bty='n')
+
+
+```
+
+
+####Fit individual curve for each experimental subject
+```{r,warning=F,message=F}
+plot(augPred(m8,level=0:1),layout=c(5,5,1),main="Individual profile & Mean profile") #model bulit using Raw TV
+plot(augPred(m9,level=0:1),layout=c(5,5,1),main="Individual profile & Mean profile(logTV)") #model bulit using log transformed TV
+trellis.device(color=F)
+```
+
+####residue Diagnostics
+```{r,warning=F,message=F}
+plot(m8,resid(.,type="p")~fitted(.)|factor(Treatment),layout=c(5,1),aspect=2,abline=2,id=0.05)
+plot(m8,resid(.)~PGday,abline=0,id=0.05)
+plot(m9,resid(.,type="p")~fitted(.)|factor(Treatment),layout=c(5,1),aspect=2,abline=2)
+plot(m9,resid(.)~PGday,abline=0)
+qqnorm(m8,~resid(.)|factor(Treatment),layout=c(5,1),aspect=2,id=0.05)
+qqnorm(m9,~resid(.)|factor(Treatment),layout=c(5,1),aspect=2,id=0.05)
+```
+
+####Diagnostics of random effects
+```{r,warning=F,message=F}
+qqnorm(m8,~ranef(.),id=0.1)#Check normality of random effects
+```
+
+####Observed vs predicted value
+```{r,warning=F,message=F}
+plot(m8,TV~fitted(.)|factor(Treatment),id=0.05,layout=c(5,1),aspect=2,abline=c(0,1),lty=2)
+plot(m9,logTV~fitted(.)|factor(Treatment),id=0.05,layout=c(5,1),aspect=2,abline=c(0,1),lty=2)
+```
+
+####refit model after removing outlier 8067
+```{r,warning=F,message=F}
+wang.graw2 = wang.graw[wang.graw$mouse != "8:6LC-cD7A8" ,]
+m8.update = update(m8,data=wang.graw2)
+summary(m8.update)
+anova(m8)
+anova(m8.update)
+```
+
+####Fit individual curve for each experimental subject and plot observed~fitted for updated model
+```{r,warning=F,message=F}
+#plot(augPred(m8.update,level=0:1),layout=c(5,5,1),main="Individual profile & Mean profile")
+#plot(m8.update,TV~fitted(.)|factor(Treatment),id=0.05,layout=c(5,1),aspect=2,abline=c(0,1),lty=2)
+```
+
+##**Conclusion**
+1.LMM only shows significant main effect of PGday, but no significant treatment effect or treatment*PGday interaction.
+
+2.using raw TV is better than log transformed TV, better agreement between fitted and observed values, also there is systematic bias in residual~PGday plot using logTV
+
+3.one subject(6) is the obvious outlier, after removing it, interaction between treatment(LC-cD7A8) and PGday^2 becomes significant, and interaction between treatment(LC-BMS-20mpk) and PGday^2 is borderline significant
+
+
+
+
+
+
+
+
+
+
+
+
+
